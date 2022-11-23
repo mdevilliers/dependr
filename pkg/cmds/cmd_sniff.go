@@ -1,10 +1,6 @@
 package cmds
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-
 	"github.com/mdevilliers/depender/pkg/dependabot"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli/v2"
@@ -20,32 +16,37 @@ func sniffCmd() *cli.Command {
 				Usage:    "path to dependabot file or root of project",
 				Required: true,
 			},
+			&cli.BoolFlag{
+				Name:    "create-if-missing",
+				Aliases: []string{"c"},
+				Usage:   "create dependabot.yml file if missing. Defaults to .github/dependabot.yml path",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			path := c.Value("path").(string)
+			create := c.Value("create-if-missing").(bool)
 
-			// if path isn't absolute ensure that it is
-			if !filepath.IsAbs(path) {
-				wd, err := os.Getwd()
-				if err != nil {
-					return errors.Wrap(err, "error getting working directory")
-				}
-				path = filepath.Join(wd, path)
-			}
-
-			fmt.Println(path)
 			// load file (or return base file in none exists) , preserving comments
-			// look for evidence of eco-systems
-			// add a default configuration
-			// write file
+			// TODO : look for evidence of eco-systems
+			// TODO : add a default configuration
+			// TODO : write file
 
-			d, err := dependabot.Load(path)
-			if err != nil {
-				return err
+			type scanner interface {
+				Scan() error
 			}
-			err = d.Scan()
+			var s scanner
+			var err error
 
-			return err
+			if create {
+				s, err = dependabot.LoadOrCreate(path)
+			} else {
+				s, err = dependabot.Load(path)
+			}
+
+			if err != nil {
+				return errors.Wrap(err, "error loading configuration")
+			}
+			return s.Scan()
 		},
 	}
 }

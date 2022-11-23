@@ -1,20 +1,21 @@
 package dependabot
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
 type (
 	node struct {
-		N        yaml.Node
-		root     string
-		filePath string
+		// N holds a reference to the parsed dependabot configuration
+		N *yaml.Node
+		// repo holds the sanitised file information for the dependabot config file
+		repo repo
 	}
 
 	Update struct {
@@ -23,6 +24,13 @@ type (
 		Schedule         struct {
 			Interval string
 		}
+	}
+
+	repo struct {
+		// root is the absolute path to the folder containing filePath
+		root string
+		// dependabotFilePath is the local path (from the root) to the dependabot configuration
+		dependabotFilePath string
 	}
 )
 
@@ -34,66 +42,120 @@ var (
 // initialsed parsed config or an error
 func Load(path string) (*node, error) {
 
-	fi, err := os.Lstat(path)
+	repo, err := NewRepo(path)
 	if err != nil {
-		return nil, err
+		return &node{repo: *repo}, errors.Wrapf(err, "error parsing supplied path %s", path)
 	}
-
-	switch mode := fi.Mode(); {
-	case mode.IsRegular():
-		return loadFile(path)
-	case mode.IsDir():
-
-		files := []string{
-			"dependabot.yml",
-			"dependabot.yaml",
-			".github/dependabot.yml",
-			".github/dependabot.yaml",
-		}
-
-		for _, file := range files {
-			p := filepath.Join(path, file)
-			n, err := loadFile(p)
-			if err == nil { // check for no error
-				return n, nil
-			}
-		}
-		return nil, ErrMissingConfigFile
-	default:
-		return nil, ErrMissingConfigFile
-	}
+	return &node{
+		repo: *repo,
+	}, nil
 }
 
-func loadFile(path string) (*node, error) {
-	data, err := os.ReadFile(path)
+// LoadOrCreate will find and load an existing dependabotconfig
+// or promise to create one if missing and a config is required
+func LoadOrCreate(path string) (*node, error) {
+
+	n, err := Load(path)
+
+	if err != nil && errors.Is(err, ErrMissingConfigFile) {
+		n.repo.dependabotFilePath = ".github/dependabot.yml"
+		return n, nil
+	}
+	return n, err
+}
+
+func NewRepo(path string) (*repo, error) {
+
+	fullpath, err := ensureAbsolutePath(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrMissingConfigFile
+		return nil, err
+	}
+
+	fi, err := os.Lstat(fullpath)
+	if err != nil {
+		return nil, err
+	}
+
+	isFile := false
+	isDirectory := false
+	switch mode := fi.Mode(); {
+	case mode.IsRegular():
+		isFile = true
+	case mode.IsDir():
+		isDirectory = true
+	default:
+		return nil, errors.New("unsupported file path")
+	}
+
+	parent := fullpath
+	if isFile {
+		parent = filepath.Dir(fullpath)
+	}
+
+	root, err := getCommandOutput(parent, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, err
+	}
+
+	files := []string{
+		"dependabot.yml", "dependabot.yaml", ".github/dependabot.yml", ".github/dependabot.yaml",
+	}
+
+	fileName := "unknown"
+
+	if isDirectory {
+		// look for dependabot files from root
+		found := false
+		for _, f := range files {
+			if fileExists(filepath.Join(root, f)) {
+				fileName = f
+				found = true
+				break
+			}
 		}
-		return nil, err
+		if !found {
+			return &repo{root: root}, ErrMissingConfigFile
+		}
+	}
+	if isFile {
+		// is the file a whitelisted dependabot file
+		found := false
+		for _, f := range files {
+			if f == fi.Name() {
+				fileName = f
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &repo{root: root}, ErrMissingConfigFile
+		}
 	}
 
-	var n yaml.Node
-	if err := yaml.Unmarshal(data, &n); err != nil {
-		return nil, err
-	}
+	return &repo{
+		root:               root,
+		dependabotFilePath: fileName,
+	}, nil
+}
 
-	// Assume we are in a git repository
-	// Running :
-	// git rev-parse --show-toplevel
-	// Will return the root folder
-	parent := filepath.Dir(path)
-	response, err := getCommandOutput(parent, "git", "rev-parse", "--show-toplevel")
-	if err != nil {
-		return nil, err
+// fileExists return true if exists
+func fileExists(path string) bool {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return false
 	}
-	node := &node{
-		N:        n,
-		root:     response,
-		filePath: strings.ReplaceAll(path, response+"/", ""),
-	}
+	return true
+}
 
-	return node, nil
+// ensureAbsolutePath makes the path absolute or returns an error
+func ensureAbsolutePath(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(wd, path), nil
+	}
+	return path, nil
 }
 
 // getCommandOutput evaluates the given command and returns the trimmed output
@@ -106,7 +168,4 @@ func getCommandOutput(dir string, name string, args ...string) (string, error) {
 	text := string(data)
 	text = strings.TrimSpace(text)
 	return text, err
-}
-
-func (n *node) EnsureUpdateExists(update Update) {
 }
