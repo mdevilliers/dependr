@@ -21,9 +21,10 @@ type (
 	Update struct {
 		PackageEcoSystem string
 		Directory        string
-		Schedule         struct {
-			Interval string
-		}
+		Schedule         Schedule
+	}
+	Schedule struct {
+		Interval string
 	}
 
 	repo struct {
@@ -105,29 +106,15 @@ func NewRepo(path string) (*repo, error) {
 
 	if isDirectory {
 		// look for dependabot files from root
-		found := false
-		for _, f := range files {
-			if fileExists(filepath.Join(root, f)) {
-				fileName = f
-				found = true
-				break
-			}
-		}
-		if !found {
+		fileName = findDependabotFile(root, files)
+		if fileName == "" {
 			return &repo{root: root}, ErrMissingConfigFile
 		}
 	}
 	if isFile {
 		// is the file a whitelisted dependabot file
-		found := false
-		for _, f := range files {
-			if f == fi.Name() {
-				fileName = f
-				found = true
-				break
-			}
-		}
-		if !found {
+		fileName = isADependabotFile(fi.Name(), files)
+		if fileName == "" {
 			return &repo{root: root}, ErrMissingConfigFile
 		}
 	}
@@ -138,8 +125,26 @@ func NewRepo(path string) (*repo, error) {
 	}, nil
 }
 
-// fileExists return true if exists
-func fileExists(path string) bool {
+func findDependabotFile(root string, files []string) string {
+	for _, f := range files {
+		if pathExists(filepath.Join(root, f)) {
+			return f
+		}
+	}
+	return ""
+}
+
+func isADependabotFile(fileName string, files []string) string {
+	for _, f := range files {
+		if f == fileName {
+			return f
+		}
+	}
+	return ""
+}
+
+// pathExists return true if exists
+func pathExists(path string) bool {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return false
 	}
