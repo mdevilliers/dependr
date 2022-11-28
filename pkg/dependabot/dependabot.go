@@ -1,6 +1,7 @@
 package dependabot
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,26 +13,30 @@ import (
 
 type (
 	node struct {
-		// N holds a reference to the parsed dependabot configuration
-		N *yaml.Node
 		// repo holds the sanitised file information for the dependabot config file
 		repo repo
 	}
 
+	Doc struct {
+		Updates []Update
+	}
 	Update struct {
-		PackageEcoSystem string
-		Directory        string
-		Schedule         Schedule
+		PackageEcoSystem string   `yaml:"package-ecosystem"`
+		Directory        string   `yaml:"directory"`
+		Schedule         Schedule `yaml:"schedule"`
 	}
 	Schedule struct {
 		Interval string
 	}
 
+	Updates map[string]Update
+
 	repo struct {
 		// root is the absolute path to the folder containing filePath
 		root string
 		// dependabotFilePath is the local path (from the root) to the dependabot configuration
-		dependabotFilePath string
+		dependabotFilePath   string
+		dependabotFileExists bool
 	}
 )
 
@@ -43,7 +48,7 @@ var (
 // initialsed parsed config or an error
 func Load(path string) (*node, error) {
 
-	repo, err := NewRepo(path)
+	repo, err := newRepo(path)
 	if err != nil {
 		return &node{repo: *repo}, errors.Wrapf(err, "error parsing supplied path %s", path)
 	}
@@ -65,7 +70,9 @@ func LoadOrCreate(path string) (*node, error) {
 	return n, err
 }
 
-func NewRepo(path string) (*repo, error) {
+// A repo encapsulates all of the file path information for
+// a github repository.
+func newRepo(path string) (*repo, error) {
 
 	fullpath, err := ensureAbsolutePath(path)
 	if err != nil {
@@ -120,11 +127,13 @@ func NewRepo(path string) (*repo, error) {
 	}
 
 	return &repo{
-		root:               root,
-		dependabotFilePath: fileName,
+		root:                 root,
+		dependabotFilePath:   fileName,
+		dependabotFileExists: true,
 	}, nil
 }
 
+// returns a matched file if it exists or an empty string
 func findDependabotFile(root string, files []string) string {
 	for _, f := range files {
 		if pathExists(filepath.Join(root, f)) {
@@ -134,6 +143,8 @@ func findDependabotFile(root string, files []string) string {
 	return ""
 }
 
+// checks if a file exists in the list of files and returns either
+// the name of the match or an empty string.
 func isADependabotFile(fileName string, files []string) string {
 	for _, f := range files {
 		if f == fileName {
@@ -173,4 +184,58 @@ func getCommandOutput(dir string, name string, args ...string) (string, error) {
 	text := string(data)
 	text = strings.TrimSpace(text)
 	return text, err
+}
+
+func (u Updates) Add(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	u[key] = update
+}
+
+func (u Updates) RemoveIfExists(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	_, found := u[key]
+	if found {
+		delete(u, key)
+	}
+}
+
+func (u Updates) ToArray() []Update {
+	all := []Update{}
+	for _, v := range u {
+		all = append(all, v)
+	}
+	return all
+}
+
+func (u Updates) ApplyAllTo(n *yaml.Node) error {
+
+	all := u.ToArray()
+
+	// we need to convert the existing updates to
+	// yaml and then parse again into Node(s)
+	d, err := yaml.Marshal(all)
+	if err != nil {
+		return err
+	}
+	var yy yaml.Node
+	if err = yaml.Unmarshal(d, &yy); err != nil {
+		return err
+	}
+
+	root := n.Content[0]
+	var previous *yaml.Node
+	for i, child := range root.Content {
+		if previous != nil && previous.Value == "updates" {
+			// should have found the sequence (array) of existing updates
+			if root.Content[i].Tag == "!!null" {
+				root.Content[i] = yy.Content[0]
+			} else {
+				root.Content[i].Content = append(root.Content[i].Content, yy.Content[0].Content...)
+			}
+			return nil
+		}
+		previous = child
+	}
+
+	return nil
 }
