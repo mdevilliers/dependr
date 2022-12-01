@@ -32,3 +32,9 @@ linters:
     - unconvert
     - unparam
     - unused
+
+linters-settings:
+  goconst:
+    # Ignore test files.
+    # Default: false
+    ignore-tests: true
