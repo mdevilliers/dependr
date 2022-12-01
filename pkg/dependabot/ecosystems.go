@@ -111,7 +111,7 @@ func (n *node) Scan() error { //nolint:funlen
 	var p yaml.Node
 
 	if n.repo.dependabotFileExists {
-		data, err := os.ReadFile(path.Join(n.repo.root, n.repo.dependabotFilePath))
+		data, err := osReadFile(path.Join(n.repo.root, n.repo.dependabotFilePath))
 		if err != nil {
 			return errors.Wrapf(err, "error loading file: %s", n.repo.dependabotFilePath)
 		}
@@ -160,7 +160,7 @@ updates:
 	}
 
 	fullPath := filepath.Join(n.repo.root, n.repo.dependabotFilePath)
-	if err := os.WriteFile(fullPath, bytes, 0600); err != nil { //nolint:gomnd
+	if err := osWriteFile(fullPath, bytes, 0600); err != nil { //nolint:gomnd
 		return errors.Wrapf(err, "error writing dependabot file: %s", fullPath)
 	}
 

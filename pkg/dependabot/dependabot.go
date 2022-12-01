@@ -42,6 +42,15 @@ type (
 
 var (
 	ErrMissingConfigFile = errors.New("error finding dependabot config")
+
+	// allow redirecting os functions for testing
+	osReadFile  = os.ReadFile
+	osStat      = os.Stat
+	osGetwd     = os.Getwd
+	osWriteFile = os.WriteFile
+
+	// allow redirecting the git command for testing
+	osGetRootFolder = getRootFolder
 )
 
 // Load will search the path for a dependabot file, returning an
@@ -50,6 +59,9 @@ func Load(path string) (*node, error) {
 
 	repo, err := newRepo(path)
 	if err != nil {
+		if repo == nil {
+			return nil, errors.Wrapf(err, "error parsing supplied path %s", path)
+		}
 		return &node{repo: *repo}, errors.Wrapf(err, "error parsing supplied path %s", path)
 	}
 	return &node{
@@ -62,7 +74,6 @@ func Load(path string) (*node, error) {
 func LoadOrCreate(path string) (*node, error) {
 
 	n, err := Load(path)
-
 	if err != nil && errors.Is(err, ErrMissingConfigFile) {
 		n.repo.dependabotFilePath = ".github/dependabot.yml"
 		return n, nil
@@ -79,9 +90,15 @@ func newRepo(path string) (*repo, error) {
 		return nil, err
 	}
 
-	fi, err := os.Lstat(fullpath)
+	root, err := osGetRootFolder(fullpath)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
+	}
+	ret := &repo{root: root}
+
+	fi, err := osStat(fullpath)
+	if err != nil {
+		return ret, ErrMissingConfigFile
 	}
 
 	isFile := false
@@ -92,17 +109,7 @@ func newRepo(path string) (*repo, error) {
 	case mode.IsDir():
 		isDirectory = true
 	default:
-		return nil, errors.New("unsupported file path")
-	}
-
-	parent := fullpath
-	if isFile {
-		parent = filepath.Dir(fullpath)
-	}
-
-	root, err := getCommandOutput(parent, "git", "rev-parse", "--show-toplevel")
-	if err != nil {
-		return nil, err
+		return ret, errors.New("unsupported file path")
 	}
 
 	files := []string{
@@ -115,22 +122,21 @@ func newRepo(path string) (*repo, error) {
 		// look for dependabot files from root
 		fileName = findDependabotFile(root, files)
 		if fileName == "" {
-			return &repo{root: root}, ErrMissingConfigFile
+			return ret, ErrMissingConfigFile
 		}
 	}
 	if isFile {
 		// is the file a whitelisted dependabot file
 		fileName = isADependabotFile(fi.Name(), files)
 		if fileName == "" {
-			return &repo{root: root}, ErrMissingConfigFile
+			return ret, ErrMissingConfigFile
 		}
 	}
 
-	return &repo{
-		root:                 root,
-		dependabotFilePath:   fileName,
-		dependabotFileExists: true,
-	}, nil
+	ret.dependabotFileExists = true
+	ret.dependabotFilePath = fileName
+
+	return ret, nil
 }
 
 // returns a matched file if it exists or an empty string
@@ -156,7 +162,7 @@ func isADependabotFile(fileName string, files []string) string {
 
 // pathExists return true if exists
 func pathExists(path string) bool {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	if _, err := osStat(path); errors.Is(err, os.ErrNotExist) {
 		return false
 	}
 	return true
@@ -165,13 +171,23 @@ func pathExists(path string) bool {
 // ensureAbsolutePath makes the path absolute or returns an error
 func ensureAbsolutePath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
-		wd, err := os.Getwd()
+		wd, err := osGetwd()
 		if err != nil {
 			return "", err
 		}
 		return filepath.Join(wd, path), nil
 	}
 	return path, nil
+}
+
+// getRootFolder returns the path to the 'root' folder or an error
+func getRootFolder(dir string) (string, error) {
+	path, err := getCommandOutput(dir, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	bits := strings.Split(path, "\n")
+	return bits[0], nil
 }
 
 // getCommandOutput evaluates the given command and returns the trimmed output
