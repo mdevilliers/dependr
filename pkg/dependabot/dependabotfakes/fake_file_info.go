@@ -3,6 +3,7 @@ package dependabotfakes
 
 import (
 	"io/fs"
+	"os"
 	"sync"
 	"time"
 )
@@ -424,4 +425,4 @@ func (fake *FakeFileInfo) recordInvocation(key string, args []interface{}) {
 	fake.invocations[key] = append(fake.invocations[key], args)
 }
 
-var _ fs.FileInfo = new(FakeFileInfo)
+var _ os.FileInfo = new(FakeFileInfo)

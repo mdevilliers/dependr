@@ -1,14 +1,12 @@
 package dependabot
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
-	"gopkg.in/yaml.v3"
 )
 
 type (
@@ -16,20 +14,6 @@ type (
 		// repo holds the sanitised file information for the dependabot config file
 		repo repo
 	}
-
-	Doc struct {
-		Updates []Update
-	}
-	Update struct {
-		PackageEcoSystem string   `yaml:"package-ecosystem"`
-		Directory        string   `yaml:"directory"`
-		Schedule         Schedule `yaml:"schedule"`
-	}
-	Schedule struct {
-		Interval string
-	}
-
-	Updates map[string]Update
 
 	repo struct {
 		// root is the absolute path to the folder containing filePath
@@ -57,12 +41,9 @@ var (
 // initialsed parsed config or an error
 func Load(path string) (*node, error) {
 
-	repo, err := newRepo(path)
+	repo, err := newRepo(path, false)
 	if err != nil {
-		if repo == nil {
-			return nil, errors.Wrapf(err, "error parsing supplied path %s", path)
-		}
-		return &node{repo: *repo}, errors.Wrapf(err, "error parsing supplied path %s", path)
+		return nil, errors.Wrapf(err, "error parsing supplied path %s", path)
 	}
 	return &node{
 		repo: *repo,
@@ -70,47 +51,57 @@ func Load(path string) (*node, error) {
 }
 
 // LoadOrCreate will find and load an existing dependabotconfig
-// or promise to create one if missing and a config is required
+// or promise to create one if missing and a config is required.
+// The path must path to a folder that exists.
 func LoadOrCreate(path string) (*node, error) {
 
-	n, err := Load(path)
-	if err != nil && errors.Is(err, ErrMissingConfigFile) {
-		n.repo.dependabotFilePath = ".github/dependabot.yml"
-		return n, nil
+	repo, err := newRepo(path, true)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error parsing supplied path %s", path)
 	}
-	return n, err
+	return &node{
+		repo: *repo,
+	}, nil
 }
 
 // A repo encapsulates all of the file path information for
 // a github repository.
-func newRepo(path string) (*repo, error) {
+func newRepo(path string, createIfMissing bool) (*repo, error) {
 
 	fullpath, err := ensureAbsolutePath(path)
 	if err != nil {
 		return nil, err
 	}
-
-	root, err := osGetRootFolder(fullpath)
-	if err != nil {
-		return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
-	}
-	ret := &repo{root: root}
+	ret := &repo{}
 
 	fi, err := osStat(fullpath)
 	if err != nil {
-		return ret, ErrMissingConfigFile
+		return nil, err
 	}
 
+	var rootFolderPath string
 	isFile := false
 	isDirectory := false
 	switch mode := fi.Mode(); {
 	case mode.IsRegular():
 		isFile = true
+		rootFolderPath, err = osGetRootFolder(filepath.Dir(fullpath))
+		if err != nil {
+			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
+		}
+
 	case mode.IsDir():
 		isDirectory = true
+		rootFolderPath, err = osGetRootFolder(fullpath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
+		}
+
 	default:
-		return ret, errors.New("unsupported file path")
+		return nil, errors.New("unsupported file path")
 	}
+
+	ret.root = rootFolderPath
 
 	files := []string{
 		"dependabot.yml", "dependabot.yaml", ".github/dependabot.yml", ".github/dependabot.yaml",
@@ -120,8 +111,13 @@ func newRepo(path string) (*repo, error) {
 
 	if isDirectory {
 		// look for dependabot files from root
-		fileName = findDependabotFile(root, files)
+		fileName = findDependabotFile(rootFolderPath, files)
 		if fileName == "" {
+			if createIfMissing {
+				ret.dependabotFileExists = false
+				ret.dependabotFilePath = ".github/dependabot.yml"
+				return ret, nil
+			}
 			return ret, ErrMissingConfigFile
 		}
 	}
@@ -200,58 +196,4 @@ func getCommandOutput(dir string, name string, args ...string) (string, error) {
 	text := string(data)
 	text = strings.TrimSpace(text)
 	return text, err
-}
-
-func (u Updates) Add(update Update) {
-	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
-	u[key] = update
-}
-
-func (u Updates) RemoveIfExists(update Update) {
-	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
-	_, found := u[key]
-	if found {
-		delete(u, key)
-	}
-}
-
-func (u Updates) ToArray() []Update {
-	all := []Update{}
-	for _, v := range u {
-		all = append(all, v)
-	}
-	return all
-}
-
-func (u Updates) ApplyAllTo(n *yaml.Node) error {
-
-	all := u.ToArray()
-
-	// we need to convert the existing updates to
-	// yaml and then parse again into Node(s)
-	d, err := yaml.Marshal(all)
-	if err != nil {
-		return err
-	}
-	var yy yaml.Node
-	if err = yaml.Unmarshal(d, &yy); err != nil {
-		return err
-	}
-
-	root := n.Content[0]
-	var previous *yaml.Node
-	for i, child := range root.Content {
-		if previous != nil && previous.Value == "updates" {
-			// should have found the sequence (array) of existing updates
-			if root.Content[i].Tag == "!!null" {
-				root.Content[i] = yy.Content[0]
-			} else {
-				root.Content[i].Content = append(root.Content[i].Content, yy.Content[0].Content...)
-			}
-			return nil
-		}
-		previous = child
-	}
-
-	return nil
 }

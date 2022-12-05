@@ -15,6 +15,20 @@ type (
 	ecosystems struct {
 		files map[string]string
 	}
+
+	Doc struct {
+		Updates []Update
+	}
+	Update struct {
+		PackageEcoSystem string   `yaml:"package-ecosystem"`
+		Directory        string   `yaml:"directory"`
+		Schedule         Schedule `yaml:"schedule"`
+	}
+	Schedule struct {
+		Interval string
+	}
+
+	Updates map[string]Update
 )
 
 var (
@@ -175,4 +189,58 @@ func newDefaultUpdate(ecosystem, directory string) Update {
 			Interval: "weekly",
 		},
 	}
+}
+
+func (u Updates) Add(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	u[key] = update
+}
+
+func (u Updates) RemoveIfExists(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	_, found := u[key]
+	if found {
+		delete(u, key)
+	}
+}
+
+func (u Updates) ToArray() []Update {
+	all := []Update{}
+	for _, v := range u {
+		all = append(all, v)
+	}
+	return all
+}
+
+func (u Updates) ApplyAllTo(n *yaml.Node) error {
+
+	all := u.ToArray()
+
+	// we need to convert the existing updates to
+	// yaml and then parse again into Node(s)
+	d, err := yaml.Marshal(all)
+	if err != nil {
+		return err
+	}
+	var yy yaml.Node
+	if err = yaml.Unmarshal(d, &yy); err != nil {
+		return err
+	}
+
+	root := n.Content[0]
+	var previous *yaml.Node
+	for i, child := range root.Content {
+		if previous != nil && previous.Value == "updates" {
+			// should have found the sequence (array) of existing updates
+			if root.Content[i].Tag == "!!null" {
+				root.Content[i] = yy.Content[0]
+			} else {
+				root.Content[i].Content = append(root.Content[i].Content, yy.Content[0].Content...)
+			}
+			return nil
+		}
+		previous = child
+	}
+
+	return nil
 }
