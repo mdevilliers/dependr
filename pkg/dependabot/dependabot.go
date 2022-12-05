@@ -79,39 +79,31 @@ func newRepo(path string, createIfMissing bool) (*repo, error) {
 		return nil, err
 	}
 
-	var rootFolderPath string
-	isFile := false
-	isDirectory := false
-	switch mode := fi.Mode(); {
-	case mode.IsRegular():
-		isFile = true
-		rootFolderPath, err = osGetRootFolder(filepath.Dir(fullpath))
-		if err != nil {
-			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
-		}
-
-	case mode.IsDir():
-		isDirectory = true
-		rootFolderPath, err = osGetRootFolder(fullpath)
-		if err != nil {
-			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
-		}
-
-	default:
-		return nil, errors.New("unsupported file path")
-	}
-
-	ret.root = rootFolderPath
+	var fileName string
 
 	files := []string{
 		"dependabot.yml", "dependabot.yaml", ".github/dependabot.yml", ".github/dependabot.yaml",
 	}
 
-	fileName := "unknown"
+	switch mode := fi.Mode(); {
+	case mode.IsRegular():
+		ret.root, err = osGetRootFolder(filepath.Dir(fullpath))
+		if err != nil {
+			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
+		}
+		// is the file a whitelisted dependabot file
+		fileName = isADependabotFile(fi.Name(), files)
+		if fileName == "" {
+			return ret, ErrMissingConfigFile
+		}
 
-	if isDirectory {
+	case mode.IsDir():
+		ret.root, err = osGetRootFolder(fullpath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "error resolving to a github repo - %s", fullpath)
+		}
 		// look for dependabot files from root
-		fileName = findDependabotFile(rootFolderPath, files)
+		fileName = findDependabotFile(ret.root, files)
 		if fileName == "" {
 			if createIfMissing {
 				ret.dependabotFileExists = false
@@ -120,13 +112,9 @@ func newRepo(path string, createIfMissing bool) (*repo, error) {
 			}
 			return ret, ErrMissingConfigFile
 		}
-	}
-	if isFile {
-		// is the file a whitelisted dependabot file
-		fileName = isADependabotFile(fi.Name(), files)
-		if fileName == "" {
-			return ret, ErrMissingConfigFile
-		}
+
+	default:
+		return nil, errors.New("unsupported file path")
 	}
 
 	ret.dependabotFileExists = true
