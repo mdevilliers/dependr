@@ -7,6 +7,6 @@ import (
 // Commands returns all registered commands
 func Commands() []*cli.Command {
 	return []*cli.Command{
-		sniffCmd(),
+		scanCmd(),
 	}
 }
