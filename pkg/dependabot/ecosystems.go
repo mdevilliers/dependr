@@ -150,6 +150,11 @@ func (n *node) Scan() error { //nolint:funlen
 		}
 	} else {
 
+		// check if we need to do anything, return if nothing to do.
+		if updates.Empty() {
+			return nil
+		}
+
 		//nolint:lll
 		data := `# To get started with Dependabot version updates, you'll need to specify which
 # package ecosystems to update and where the package manifests are located.
@@ -170,10 +175,19 @@ updates:
 
 	bytes, err := yaml.Marshal(&p)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling ")
+		return errors.Wrap(err, "error marshalling yaml")
 	}
 
 	fullPath := filepath.Join(n.repo.root, n.repo.dependabotFilePath)
+
+	// ensure directory exists
+	dir := path.Dir(fullPath)
+	if !pathExists(dir) {
+		if err := osMkdirAll(dir, os.ModePerm); err != nil {
+			return errors.Wrapf(err, "error creating folder : %s", dir)
+		}
+	}
+
 	if err := osWriteFile(fullPath, bytes, 0600); err != nil { //nolint:gomnd
 		return errors.Wrapf(err, "error writing dependabot file: %s", fullPath)
 	}
@@ -210,6 +224,10 @@ func (u Updates) ToArray() []Update {
 		all = append(all, v)
 	}
 	return all
+}
+
+func (u Updates) Empty() bool {
+	return len(u) == 0
 }
 
 func (u Updates) ApplyAllTo(n *yaml.Node) error {

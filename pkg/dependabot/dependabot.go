@@ -32,6 +32,7 @@ var (
 	osStat      = os.Stat
 	osGetwd     = os.Getwd
 	osWriteFile = os.WriteFile
+	osMkdirAll  = os.MkdirAll
 
 	// allow redirecting the git command for testing
 	osGetRootFolder = getRootFolder
