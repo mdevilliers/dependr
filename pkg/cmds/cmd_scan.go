@@ -6,9 +6,9 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-func sniffCmd() *cli.Command {
+func scanCmd() *cli.Command {
 	return &cli.Command{
-		Name: "sniff",
+		Name: "scan",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "create-if-missing",

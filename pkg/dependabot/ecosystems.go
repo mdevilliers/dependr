@@ -15,6 +15,20 @@ type (
 	ecosystems struct {
 		files map[string]string
 	}
+
+	Doc struct {
+		Updates []Update
+	}
+	Update struct {
+		PackageEcoSystem string   `yaml:"package-ecosystem"`
+		Directory        string   `yaml:"directory"`
+		Schedule         Schedule `yaml:"schedule"`
+	}
+	Schedule struct {
+		Interval string
+	}
+
+	Updates map[string]Update
 )
 
 var (
@@ -111,7 +125,7 @@ func (n *node) Scan() error { //nolint:funlen
 	var p yaml.Node
 
 	if n.repo.dependabotFileExists {
-		data, err := os.ReadFile(path.Join(n.repo.root, n.repo.dependabotFilePath))
+		data, err := osReadFile(path.Join(n.repo.root, n.repo.dependabotFilePath))
 		if err != nil {
 			return errors.Wrapf(err, "error loading file: %s", n.repo.dependabotFilePath)
 		}
@@ -136,6 +150,11 @@ func (n *node) Scan() error { //nolint:funlen
 		}
 	} else {
 
+		// check if we need to do anything, return if nothing to do.
+		if updates.Empty() {
+			return nil
+		}
+
 		//nolint:lll
 		data := `# To get started with Dependabot version updates, you'll need to specify which
 # package ecosystems to update and where the package manifests are located.
@@ -156,11 +175,20 @@ updates:
 
 	bytes, err := yaml.Marshal(&p)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling ")
+		return errors.Wrap(err, "error marshalling yaml")
 	}
 
 	fullPath := filepath.Join(n.repo.root, n.repo.dependabotFilePath)
-	if err := os.WriteFile(fullPath, bytes, 0600); err != nil { //nolint:gomnd
+
+	// ensure directory exists
+	dir := path.Dir(fullPath)
+	if !pathExists(dir) {
+		if err := osMkdirAll(dir, os.ModePerm); err != nil {
+			return errors.Wrapf(err, "error creating folder : %s", dir)
+		}
+	}
+
+	if err := osWriteFile(fullPath, bytes, 0600); err != nil { //nolint:gomnd
 		return errors.Wrapf(err, "error writing dependabot file: %s", fullPath)
 	}
 
@@ -175,4 +203,62 @@ func newDefaultUpdate(ecosystem, directory string) Update {
 			Interval: "weekly",
 		},
 	}
+}
+
+func (u Updates) Add(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	u[key] = update
+}
+
+func (u Updates) RemoveIfExists(update Update) {
+	key := fmt.Sprintf("%s%s", update.PackageEcoSystem, update.Directory)
+	_, found := u[key]
+	if found {
+		delete(u, key)
+	}
+}
+
+func (u Updates) ToArray() []Update {
+	all := []Update{}
+	for _, v := range u {
+		all = append(all, v)
+	}
+	return all
+}
+
+func (u Updates) Empty() bool {
+	return len(u) == 0
+}
+
+func (u Updates) ApplyAllTo(n *yaml.Node) error {
+
+	all := u.ToArray()
+
+	// we need to convert the existing updates to
+	// yaml and then parse again into Node(s)
+	d, err := yaml.Marshal(all)
+	if err != nil {
+		return err
+	}
+	var yy yaml.Node
+	if err = yaml.Unmarshal(d, &yy); err != nil {
+		return err
+	}
+
+	root := n.Content[0]
+	var previous *yaml.Node
+	for i, child := range root.Content {
+		if previous != nil && previous.Value == "updates" {
+			// should have found the sequence (array) of existing updates
+			if root.Content[i].Tag == "!!null" {
+				root.Content[i] = yy.Content[0]
+			} else {
+				root.Content[i].Content = append(root.Content[i].Content, yy.Content[0].Content...)
+			}
+			return nil
+		}
+		previous = child
+	}
+
+	return nil
 }
